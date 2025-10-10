@@ -497,18 +497,15 @@ class CameraControl:
             "OBJCTRA" : (J2000.ra.to_string(unit=astropy.units.hour).replace("h", " ").replace("m", " ").replace("s", " "), "[HMS] Object J2000 RA"),
             "OBJCTDEC": (J2000.dec.to_string(unit=astropy.units.deg).replace("d", " ").replace("m", " ").replace("s", " "), "[DMS] Object J2000 DEC"),
             "RA"      : (float(J2000.ra.degree), "[deg] Object J2000 RA"),
-            "DEC"     : (float(J2000.dec.degree), "[deg] Object J2000 DEC")
+            "DEC"     : (float(J2000.dec.degree), "[deg] Object J2000 DEC"),
+            "EQUINOX" : (2000.0, "[yr] Equinox")
         })
         #### PIERSIDE ####
         if self.parent.knownVectors["TELESCOPE_PIER_SIDE"]["PIER_WEST"].value == ISwitchState.ON:
             FitsHeader["PIERSIDE"] = ("WEST", "West, looking East")
         else:
             FitsHeader["PIERSIDE"] = ("EAST", "East, looking West")
-        #### EQUINOX and DATE-OBS ####
-        FitsHeader.update({
-            "EQUINOX": (2000, "[yr] Equinox"),
-            "DATE-END": (datetime.datetime.utcnow().isoformat(timespec="milliseconds"), "UTC time at end of observation"),
-        })
+
         logger.debug("Finished collecting snooped data.")
         ####
         return FitsHeader
@@ -593,6 +590,8 @@ class CameraControl:
                 "FRAME": (FrameType, "Frame Type"),
                 "IMAGETYP": (FrameType+" Frame", "Frame Type"),
                 **self.snooped_FitsHeader(binnedCellSize_nm = self.getProp("UnitCellSize")[0] * self.present_CameraSettings.Binning[0]),
+                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata["FrameWallClock"]/1e9).isoformat(timespec="milliseconds"),
+                             "UTC time at end of observation"),
                 "GAIN": (metadata.get("AnalogueGain", 0.0), "Gain"),
                 "DGAIN": (metadata.get("DigitalGain", 0.0), "Digital Gain"),
             }
@@ -719,6 +718,8 @@ class CameraControl:
                 "FRAME": (FrameType, "Frame Type"),
                 "IMAGETYP": (FrameType+" Frame", "Frame Type"),
                 **self.snooped_FitsHeader(binnedCellSize_nm = self.getProp("UnitCellSize")[0] * SoftwareBinning),
+                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata["FrameWallClock"]/1e9).isoformat(timespec="milliseconds"),
+                             "UTC time at end of observation"),
                 # more info from camera
                 "GAIN": (metadata.get("AnalogueGain", 0.0), "Analog gain setting"),
                 "DGAIN": (metadata.get("DigitalGain", 0.0), "Digital Gain"),
