@@ -504,7 +504,7 @@ class ConfigProcessVector(ISwitchVector):
                         else:
                             logger.warning(f'Ignoring unknown vector {vector["name"]}!')
                 else:
-                    logger.info(f'configuration {config_filename} does not exist')
+                    logger.debug(f'configuration {config_filename} does not exist')
             elif action == "CONFIG_SAVE":
                 logger.info(f'saving configuration in {config_filename}')
                 states = list()
