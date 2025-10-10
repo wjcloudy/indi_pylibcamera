@@ -782,7 +782,7 @@ class indi_pylibcamera(indidevice):
         cameras = Picamera2.global_camera_info()
         logger.info(f'found cameras: {cameras}')
         # use Id as unique camera identifier
-        self.Cameras = [f'{c["Model"]}, Num{c["Num"]}, Loc{c["Location"]}' for c in cameras]
+        self.Cameras = [f'{c["Model"]}, Num{Num}, Loc{c["Location"]}' for Num, c in enumerate(cameras)]
         # We may have no cameras attached to the system
         if self.Cameras:
             CameraToConnect = min(self.config.getint("driver", "SelectCameraDevice", fallback=0), len(self.Cameras) - 1)

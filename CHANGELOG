@@ -1,4 +1,7 @@
 - fixed README: changed 'libcamera' to 'rpicam'
+- using now new "FrameWallClock" key in the frame metadata dictionary to set "DATE-END"
+- fixed camera enumeration for newer versions of pylibcamera2
+
 
 3.0.0
 - implemented image cropping (experimental, may not work for binning > 1)
