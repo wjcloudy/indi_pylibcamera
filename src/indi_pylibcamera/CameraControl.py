@@ -590,7 +590,7 @@ class CameraControl:
                 "FRAME": (FrameType, "Frame Type"),
                 "IMAGETYP": (FrameType+" Frame", "Frame Type"),
                 **self.snooped_FitsHeader(binnedCellSize_nm = self.getProp("UnitCellSize")[0] * self.present_CameraSettings.Binning[0]),
-                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata["FrameWallClock"]/1e9).isoformat(timespec="milliseconds"),
+                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata.get("FrameWallClock", time.time()*1e9)/1e9).isoformat(timespec="milliseconds"),
                              "UTC time at end of observation"),
                 "GAIN": (metadata.get("AnalogueGain", 0.0), "Gain"),
                 "DGAIN": (metadata.get("DigitalGain", 0.0), "Digital Gain"),
@@ -651,7 +651,7 @@ class CameraControl:
         for kw, value_comment in FitsHeader.items():
             hdu.header[kw] = value_comment # astropy appropriately sets value and comment from tuple
         hdu.header.set("DATE-OBS", (datetime.datetime.fromisoformat(hdu.header["DATE-END"])-datetime.timedelta(seconds=hdu.header["EXPTIME"])).isoformat(timespec="milliseconds"),
-                       "UTC time of observation start", before="DATE-END") # FIXME: still an estimate! There may be a better way to do start time
+                       "UTC time of observation start", before="DATE-END")
         hdul = fits.HDUList([hdu])
         return hdul
 
@@ -718,7 +718,7 @@ class CameraControl:
                 "FRAME": (FrameType, "Frame Type"),
                 "IMAGETYP": (FrameType+" Frame", "Frame Type"),
                 **self.snooped_FitsHeader(binnedCellSize_nm = self.getProp("UnitCellSize")[0] * SoftwareBinning),
-                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata["FrameWallClock"]/1e9).isoformat(timespec="milliseconds"),
+                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata.get("FrameWallClock", time.time()*1e9)/1e9).isoformat(timespec="milliseconds"),
                              "UTC time at end of observation"),
                 # more info from camera
                 "GAIN": (metadata.get("AnalogueGain", 0.0), "Analog gain setting"),
