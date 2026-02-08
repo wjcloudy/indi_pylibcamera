@@ -1151,18 +1151,6 @@ class CameraControl:
 
         self.is_streaming = True
         self.Sig_StopStreaming.clear()
-        # Force-enable BLOBs on CCD2 so frames aren't silently dropped.
-        # KStars sends enableBLOB Never when streaming stops, and the
-        # IBlob.enabled flag persists.  If our thread sends frames before
-        # KStars re-sends enableBLOB Also, get_oneProperty() returns empty
-        # XML and every frame is silently lost.
-        try:
-            bv = self.parent.knownVectors["CCD2"]
-            for elem in bv.elements:
-                if hasattr(elem, 'enabled'):
-                    elem.enabled = "Also"
-        except Exception:
-            pass
         self.StreamingThread = threading.Thread(target=self.__StreamingLoop, daemon=True)
         self.StreamingThread.start()
 
@@ -1256,12 +1244,13 @@ class CameraControl:
                             self.stopRecording()
                             self.parent.setVector("RECORD_STREAM", "RECORD_OFF", value=ISwitchState.ON, state=IVectorState.OK)
 
-                # Send BLOB to client via CCD2 (dedicated INDI video streaming BLOB)
-                # CCD1 is reserved for still images (.fits). Using CCD2 prevents
-                # KStars from confusing video frames with stills.
+                # Send BLOB to client via CCD1 with format ".stream_jpg" —
+                # this is the standard INDI StreamManager convention.
+                # KStars routes BLOBs to the video viewer vs FITS viewer
+                # based on the format string, NOT the blob vector name.
                 try:
-                    bv = self.parent.knownVectors["CCD2"]
-                    bv["CCD2"].set_data(data=jpeg_bytes, format=".stream_jpg", compress=False)
+                    bv = self.parent.knownVectors["CCD1"]
+                    bv["CCD1"].set_data(data=jpeg_bytes, format=".stream_jpg", compress=False)
                     bv.state = IVectorState.OK
                     bv.send_setVector()
                 except Exception as e:

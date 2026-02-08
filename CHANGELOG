@@ -1,3 +1,14 @@
+3.3.1
+- fixed video streaming: send frames on CCD1 with format ".stream_jpg" instead of
+  a separate CCD2 BLOB vector.  This matches the standard INDI StreamManager protocol
+  used by all C++ INDI camera drivers (e.g. indi-svbony).  KStars distinguishes stills
+  from video by the BLOB format string (".fits" vs ".stream_jpg"), not by the vector
+  name.  CCD2 in INDI is conventionally the guide chip, not a streaming channel.
+  Fixes the "stuck frame / freeze" when cycling video → still → video in KStars/Ekos.
+- removed the CCD2 BLOB vector definition and the enableBLOB force-reset workaround;
+  since CCD1 is used for both stills and streaming, KStars always keeps its BLOBs
+  enabled, eliminating the enableBLOB race condition entirely.
+
 3.3.0
 - added Pi 5 PISP compressed raw format support (GBRG_PISP_COMP1 etc.) — enables raw capture
   on Pi 5 cameras like IMX415 that use the PISP pipeline

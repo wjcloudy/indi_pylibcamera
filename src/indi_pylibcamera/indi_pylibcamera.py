@@ -1340,20 +1340,11 @@ class indi_pylibcamera(indidevice):
             send_defVector=True,
         )
         self.CameraVectorNames.append("CCD_STREAM_FRAME")
-        # CCD2: Video streaming BLOB vector — separate from CCD1 (stills)
-        # KStars/Ekos expects video frames on CCD2 by convention.
-        self.checkin(
-            IBlobVector(
-                device=self.device, timestamp=self.timestamp, name="CCD2",
-                elements=[
-                    IBlob(name="CCD2", label="Video Stream"),
-                ],
-                label="Video", group="Streaming",
-                state=IVectorState.IDLE, perm=IPermission.RO, is_storable=False,
-            ),
-            send_defVector=True,
-        )
-        self.CameraVectorNames.append("CCD2")
+        # Streaming frames are sent on CCD1 with format ".stream_jpg" —
+        # this is the standard INDI StreamManager convention.  KStars uses
+        # the BLOB format string to distinguish stills (.fits) from video
+        # (.stream_jpg).  CCD2 in standard INDI is for guide chips, not
+        # video streaming.
         # Recording controls
         self.checkin(
             RecordStreamVector(parent=self),
