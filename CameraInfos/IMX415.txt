@@ -1,0 +1,98 @@
+Found 1 cameras.
+
+Camera 0:
+{'Id': '/base/axi/pcie@1000120000/rp1/i2c@80000/imx415@37',
+ 'Location': 2,
+ 'Model': 'imx415',
+ 'Num': 0,
+ 'Rotation': 180}
+
+Camera properties:
+{'ColorFilterArrangement': 2,
+ 'Location': 2,
+ 'Model': 'imx415',
+ 'PixelArrayActiveAreas': [(0, 0, 3864, 2192)],
+ 'PixelArraySize': (3864, 2192),
+ 'Rotation': 180,
+ 'ScalerCropMaximum': (0, 0, 0, 0),
+ 'SystemDevices': (20753,
+                   20754,
+                   20755,
+                   20756,
+                   20757,
+                   20758,
+                   20759,
+                   20740,
+                   20741,
+                   20742,
+                   20743),
+ 'UnitCellSize': (1450, 1450)}
+
+Raw sensor modes:
+[0:00:53.751061410] [2305]  INFO Camera camera.cpp:1215 configuring streams: (0) 640x480-XBGR8888/sRGB (1) 3864x2192-GBRG_PISP_COMP1/RAW
+[0:00:53.751170067] [2325]  INFO RPI pisp.cpp:1483 Sensor: /base/axi/pcie@1000120000/rp1/i2c@80000/imx415@37 - Selected sensor format: 3864x2192-SGBRG10_1X10/RAW - Selected CFE format: 3864x2192-PC1g/RAW
+[{'bit_depth': 10,
+  'crop_limits': (0, 0, 3864, 2192),
+  'exposure_limits': (118, 925492761, 20000),
+  'format': SGBRG10_CSI2P,
+  'fps': 15.0,
+  'size': (3864, 2192),
+  'unpacked': 'SGBRG10'}]
+
+Camera configuration:
+{'buffer_count': 4,
+ 'colour_space': <libcamera.ColorSpace 'sYCC'>,
+ 'controls': {'FrameDurationLimits': (100, 83333),
+              'NoiseReductionMode': <NoiseReductionModeEnum.Minimal: 3>},
+ 'display': 'main',
+ 'encode': 'main',
+ 'lores': None,
+ 'main': {'format': 'XBGR8888',
+          'framesize': 1228800,
+          'preserve_ar': True,
+          'size': (640, 480),
+          'stride': 2560},
+ 'queue': True,
+ 'raw': {'format': 'GBRG_PISP_COMP1',
+         'framesize': 8557568,
+         'size': (3864, 2192),
+         'stride': 3904},
+ 'sensor': {'bit_depth': 10, 'output_size': (3864, 2192)},
+ 'transform': <libcamera.Transform 'identity'>,
+ 'use_case': 'preview'}
+
+Camera controls:
+{'AeConstraintMode': (0, 3, 0),
+ 'AeEnable': (False, True, True),
+ 'AeExposureMode': (0, 3, 0),
+ 'AeFlickerMode': (0, 1, 0),
+ 'AeFlickerPeriod': (100, 1000000, None),
+ 'AeMeteringMode': (0, 3, 0),
+ 'AnalogueGain': (1.0, 31.62277603149414, 1.0),
+ 'AnalogueGainMode': (0, 1, 0),
+ 'AwbEnable': (False, True, None),
+ 'AwbMode': (0, 7, 0),
+ 'Brightness': (-1.0, 1.0, 0.0),
+ 'CnnEnableInputTensor': (False, True, False),
+ 'ColourCorrectionMatrix': (0.0, 8.0, None),
+ 'ColourGains': (0.0, 32.0, None),
+ 'ColourTemperature': (100, 100000, None),
+ 'Contrast': (0.0, 32.0, 1.0),
+ 'ExposureTime': (118, 925492761, 20000),
+ 'ExposureTimeMode': (0, 1, 0),
+ 'ExposureValue': (-8.0, 8.0, 0.0),
+ 'FrameDurationLimits': (66666, 925499833, 33333),
+ 'HdrMode': (0, 4, 0),
+ 'NoiseReductionMode': (0, 4, 0),
+ 'Saturation': (0.0, 32.0, 1.0),
+ 'ScalerCrop': ((0, 0, 41, 32), (0, 0, 3864, 2192), (471, 0, 2922, 2192)),
+ 'Sharpness': (0.0, 16.0, 1.0),
+ 'StatsOutputEnable': (False, True, False),
+ 'SyncFrames': (1, 1000000, 100),
+ 'SyncMode': (0, 2, 0)}
+
+Exposure time:
+  min: 118, max: 925492761, default: 20000
+
+AnalogGain:
+  min: 1.0, max: 31.62277603149414, default: 1.0

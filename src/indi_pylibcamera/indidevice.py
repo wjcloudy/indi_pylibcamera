@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def get_TimeStamp():
     """return present system time formated as INDI timestamp
     """
-    return datetime.datetime.utcnow().isoformat(timespec="seconds")
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "")
 
 
 # enumerations

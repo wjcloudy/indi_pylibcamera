@@ -1419,21 +1419,28 @@ class indi_pylibcamera(indidevice):
         )
         self.CameraVectorNames.append("CONFIG_PROCESS")
         #
-        # Maybe needed: CCD_CFA
-        # self.checkin(
-        #     ITextVector(
-        #         device=self.device, timestamp=self.timestamp, name="CCD_CFA",
-        #         elements=[
-        #             IText(name="CFA_OFFSET_X", label="Offset X", value="0"),
-        #             IText(name="CFA_OFFSET_Y", label="Offset Y", value="0"),
-        #             IText(name="CFA_TYPE", label="Type", value=self.raw_mode["format"][1:].rstrip("0123456789")),
-        #         ],
-        #         label="Color filter array", group="Image Info",
-        #         state=IVectorState.IDLE, perm=IPermission.RO,
-        #     ),
-        #     send_defVector=True,
-        # )
-        # self.CameraVectorNames.append("CCD_CFA")
+        # CCD_CFA: report Bayer color filter arrangement to INDI clients
+        if len(self.CameraThread.RawModes) > 0:
+            # Extract Bayer pattern from first (largest) raw mode format string
+            _cfa_fmt = self.CameraThread.RawModes[0]["camera_format"]
+            if _cfa_fmt.startswith("S") and len(_cfa_fmt) > 5:
+                _cfa_type = _cfa_fmt[1:5]  # e.g. "SGBRG10" -> "GBRG"
+            else:
+                _cfa_type = "RGGB"  # fallback
+            self.checkin(
+                ITextVector(
+                    device=self.device, timestamp=self.timestamp, name="CCD_CFA",
+                    elements=[
+                        IText(name="CFA_OFFSET_X", label="Offset X", value="0"),
+                        IText(name="CFA_OFFSET_Y", label="Offset Y", value="0"),
+                        IText(name="CFA_TYPE", label="Type", value=_cfa_type),
+                    ],
+                    label="Color filter array", group="Image Info",
+                    state=IVectorState.IDLE, perm=IPermission.RO, is_storable=False,
+                ),
+                send_defVector=True,
+            )
+            self.CameraVectorNames.append("CCD_CFA")
         #
         # Maybe needed: CCD_COOLER
         #

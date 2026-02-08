@@ -105,12 +105,19 @@ class SERRecorder:
         self._write_header(observer=observer, instrument=instrument)
         logger.info(f"SER recording started: {filepath} ({width}x{height}, color_id={color_id}, {bit_depth}bit)")
 
-    def _write_header(self, observer="", instrument=""):
-        """Write SER file header."""
+    def _write_header(self, observer="", instrument="", telescope=""):
+        """Write SER file header.
+        
+        SER header field order (178 bytes total):
+          FileID (14) | LuID (4) | ColorID (4) | LittleEndian (4) |
+          ImageWidth (4) | ImageHeight (4) | PixelDepthPerPlane (4) |
+          FrameCount (4) | Observer (40) | Instrument (40) |
+          Telescope (40) | DateTime (8) | DateTimeUTC (8)
+        """
         # DateTime and DateTimeUTC as SER timestamp (100ns ticks since 1 Jan 0001)
-        now = datetime.datetime.utcnow()
+        now = datetime.datetime.now(datetime.timezone.utc)
         # SER epoch: 1 January 0001
-        ser_epoch = datetime.datetime(1, 1, 1)
+        ser_epoch = datetime.datetime(1, 1, 1, tzinfo=datetime.timezone.utc)
         delta = now - ser_epoch
         ticks = int(delta.total_seconds() * 1e7)
 
@@ -119,7 +126,7 @@ class SERRecorder:
         self._file.write(b'LUCAM-RECORDER')  # 14 bytes - FileID
         self._file.write(struct.pack('<I', 0))  # 4 bytes - LuID
         self._file.write(struct.pack('<I', self._color_id))  # 4 bytes - ColorID
-        self._file.write(struct.pack('<I', 0))  # 4 bytes - LittleEndian (0 = big endian)
+        self._file.write(struct.pack('<I', 1))  # 4 bytes - LittleEndian (1 = little endian, correct for ARM)
         self._file.write(struct.pack('<I', self._width))  # 4 bytes - ImageWidth
         self._file.write(struct.pack('<I', self._height))  # 4 bytes - ImageHeight
         self._file.write(struct.pack('<I', self._bit_depth))  # 4 bytes - PixelDepthPerPlane
@@ -130,14 +137,14 @@ class SERRecorder:
         # Instrument (40 bytes, null-padded)
         inst_bytes = instrument.encode('ascii', errors='replace')[:40]
         self._file.write(inst_bytes.ljust(40, b'\x00'))
-        # Telescope (40 bytes, null-padded) — not always in the spec but some implementations include it
-        # Actually standard SER has: DateTime (8 bytes), DateTimeUTC (8 bytes)
+        # Telescope (40 bytes, null-padded) — per SER spec this comes BEFORE DateTime
+        tel_bytes = telescope.encode('ascii', errors='replace')[:40]
+        self._file.write(tel_bytes.ljust(40, b'\x00'))
+        # DateTime (8 bytes) - local time as SER ticks
         self._file.write(struct.pack('<Q', ticks))  # 8 bytes - DateTime (local)
+        # DateTimeUTC (8 bytes) - UTC time as SER ticks
         self._file.write(struct.pack('<Q', ticks))  # 8 bytes - DateTimeUTC
-        # Total so far: 14+4+4+4+4+4+4+4+40+40+8+8 = 138
-        # SER spec says header is 178 bytes. The remaining 40 bytes is the Telescope field.
-        self._file.write(b'\x00' * 40)  # 40 bytes - Telescope (padding)
-        # Total: 178 bytes
+        # Total: 14+4+4+4+4+4+4+4+40+40+40+8+8 = 178 bytes
 
     def add_frame(self, frame_data, timestamp_ns=None):
         """Add a raw frame to the SER file.

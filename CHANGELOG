@@ -1,3 +1,19 @@
+3.3.0
+- added Pi 5 PISP compressed raw format support (GBRG_PISP_COMP1 etc.) — enables raw capture
+  on Pi 5 cameras like IMX415 that use the PISP pipeline
+- added IMX415 camera adjustments entry (3864x2192, single full-res mode, no binning)
+- added CCD_CFA (Color Filter Array) INDI property for clients that use it for debayering
+- fixed SensorTemperature handling: CCD-TEMP FITS header and CCD_TEMPERATURE INDI property
+  only reported when the sensor actually provides temperature data (avoids misleading 0°C)
+- fixed SER file header field order per specification (Telescope field now correctly placed
+  before DateTime/DateTimeUTC)
+- fixed SER file LittleEndian flag (now correctly set to 1 for little-endian ARM platforms)
+- fixed AfTrigger camera control lookup (removed trailing space typo)
+- fixed deprecated datetime.utcnow()/utcfromtimestamp() calls across all modules
+- added guard against starting still exposure while video streaming is active
+- optimized streaming loop: reuse BytesIO buffer, only update camera exposure when changed
+- added CameraInfos/IMX415.txt reference data
+
 3.2.0
 - added INDI video streaming support (MJPEG-encoded live video via CCD_VIDEO_STREAM)
 - new INDI properties for streaming control: CCD_VIDEO_STREAM (on/off), STREAMING_EXPOSURE

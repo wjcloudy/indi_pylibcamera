@@ -105,7 +105,7 @@ class CameraSettings:
                 "NORMAL": controls.AfSpeedEnum.Normal,
                 "FAST": controls.AfSpeedEnum.Fast,
             }[knownVectors["CAMCTRL_AFSPEED"].get_OnSwitches()[0]]
-        if "AfTrigger " in advertised_camera_controls:
+        if "AfTrigger" in advertised_camera_controls:
             self.camera_controls["AfTrigger"] = {
                 "START": controls.AfTriggerEnum.Start,
                 "CANCEL": controls.AfTriggerEnum.Cancel,
@@ -365,6 +365,12 @@ class CameraControl:
                         pass
                     else:
                         logger.warning(f'Unsupported frame size {size} for imx708!')
+                elif self.CamProps["Model"] == 'imx415':
+                    # IMX415: single raw mode 3864x2192, no binning, no garbage columns
+                    if size == (3864, 2192):
+                        pass
+                    else:
+                        logger.warning(f'Unsupported frame size {size} for imx415!')
             # add to list of raw formats
             raw_mode = {
                 "label": f'{size[0]}x{size[1]} {sensor_format[1:5] if is_bayer else "mono"} {sensor_mode["bit_depth"]}bit',
@@ -542,8 +548,20 @@ class CameraControl:
         """
         format = self.picam2.camera_configuration()["raw"]["format"]
         self.log_FrameInformation(array=array, metadata=metadata, format=format)
+        # Handle Pi 5 PISP compressed transport formats (e.g. "GBRG_PISP_COMP1")
+        # picamera2 decompresses these transparently, so the pixel data is normal Bayer.
+        if "_PISP_COMP" in format:
+            # Extract Bayer pattern from prefix: "GBRG_PISP_COMP1" -> "GBRG"
+            pisp_bayer = format.split("_")[0]
+            if re.match(r'^[RGBW]{4}$', pisp_bayer):
+                # Treat as standard Bayer: prepend 'S' and append bit depth from raw mode config
+                bit_depth = self.present_CameraSettings.RawMode["bit_depth"]
+                format = f'S{pisp_bayer}{bit_depth}'
+                logger.info(f'PISP compressed format mapped to: {format}')
+            else:
+                raise NotImplementedError(f'got unsupported PISP raw format {format}')
         # we expect uncompressed format here
-        if format.count("_") > 0:
+        elif format.count("_") > 0:
             raise NotImplementedError(f'got unsupported raw image format {format}')
         # Bayer or mono format
         if format[0] == "S":
@@ -605,11 +623,10 @@ class CameraControl:
                 "TELESCOP": (self.parent.knownVectors["ACTIVE_DEVICES"]["ACTIVE_TELESCOPE"].value, "Telescope name"),
                 **self.parent.knownVectors["FITS_HEADER"].FitsHeader,
                 "EXPTIME": (metadata["ExposureTime"]/1e6, "[s] Total Exposure Time"),
-                "CCD-TEMP": (metadata.get('SensorTemperature', 0), "[degC] CCD Temperature"),
                 "FRAME": (FrameType, "Frame Type"),
                 "IMAGETYP": (FrameType+" Frame", "Frame Type"),
                 **self.snooped_FitsHeader(binnedCellSize_nm = self.getProp("UnitCellSize")[0] * self.present_CameraSettings.Binning[0]),
-                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata.get("FrameWallClock", time.time()*1e9)/1e9).isoformat(timespec="milliseconds"),
+                "DATE-END": (datetime.datetime.fromtimestamp(metadata.get("FrameWallClock", time.time()*1e9)/1e9, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
                              "UTC time at end of observation"),
                 "GAIN": (metadata.get("AnalogueGain", 0.0), "Gain"),
                 "DGAIN": (metadata.get("DigitalGain", 0.0), "Digital Gain"),
@@ -641,6 +658,8 @@ class CameraControl:
                     "YPIXSZ": (self.getProp("UnitCellSize")[1] / 1e3 * self.present_CameraSettings.Binning[1],
                                "[um] Y binned pixel size"),
                 })
+        if 'SensorTemperature' in metadata:
+            FitsHeader["CCD-TEMP"] = (metadata['SensorTemperature'], "[degC] CCD Temperature")
         if BayerPattern is not None:
             FitsHeader.update({
                 "XBAYROFF": (0, "[px] X offset of Bayer array"),
@@ -733,11 +752,10 @@ class CameraControl:
                 "TELESCOP": (self.parent.knownVectors["ACTIVE_DEVICES"]["ACTIVE_TELESCOPE"].value, "Telescope name"),
                 **self.parent.knownVectors["FITS_HEADER"].FitsHeader,
                 "EXPTIME": (metadata["ExposureTime"]/1e6, "[s] Total Exposure Time"),
-                "CCD-TEMP": (metadata.get('SensorTemperature', 0), "[degC] CCD Temperature"),
                 "FRAME": (FrameType, "Frame Type"),
                 "IMAGETYP": (FrameType+" Frame", "Frame Type"),
                 **self.snooped_FitsHeader(binnedCellSize_nm = self.getProp("UnitCellSize")[0] * SoftwareBinning),
-                "DATE-END": (datetime.datetime.utcfromtimestamp(metadata.get("FrameWallClock", time.time()*1e9)/1e9).isoformat(timespec="milliseconds"),
+                "DATE-END": (datetime.datetime.fromtimestamp(metadata.get("FrameWallClock", time.time()*1e9)/1e9, tz=datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
                              "UTC time at end of observation"),
                 # more info from camera
                 "GAIN": (metadata.get("AnalogueGain", 0.0), "Analog gain setting"),
@@ -765,6 +783,8 @@ class CameraControl:
                     "YPIXSZ": (self.getProp("UnitCellSize")[1] / 1e3 * SoftwareBinning, "[um] Y binned pixel size"),
 
                 })
+        if 'SensorTemperature' in metadata:
+            FitsHeader["CCD-TEMP"] = (metadata['SensorTemperature'], "[degC] CCD Temperature")
         for kw, value_comment in FitsHeader.items():
             hdu.header[kw] = value_comment
         hdu.header.set("DATE-OBS", (datetime.datetime.fromisoformat(hdu.header["DATE-END"])-datetime.timedelta(seconds=hdu.header["EXPTIME"])).isoformat(timespec="milliseconds"),
@@ -951,9 +971,10 @@ class CameraControl:
                 if not Abort:
                     (array, ), metadata = self.picam2.wait(job)
                     logger.info('got exposed frame')
-                    # at least HQ camera reports CCD temperature in meta data
-                    self.parent.setVector("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE",
-                                          value=metadata.get('SensorTemperature', 0))
+                    # update CCD temperature only if the sensor actually reports it
+                    if 'SensorTemperature' in metadata:
+                        self.parent.setVector("CCD_TEMPERATURE", "CCD_TEMPERATURE_VALUE",
+                                              value=metadata['SensorTemperature'])
                     # inform client about progress
                     self.parent.setVector("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", value=0, state=IVectorState.BUSY)
                 # last chance to exit or abort before sending blob
@@ -1031,6 +1052,10 @@ class CameraControl:
         Args:
             exposuretime: exposure time (seconds)
         """
+        if self.is_streaming:
+            logger.warning("Cannot start exposure while streaming is active. Stop streaming first.")
+            self.parent.setVector("CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", value=0, state=IVectorState.ALERT)
+            return
         if not self.ExposureThread.is_alive():
             raise RuntimeError("Try ro start exposure without having exposure loop running!")
         self.ExposureTime = exposuretime
@@ -1160,6 +1185,8 @@ class CameraControl:
         avg_fps_frames = 0
         avg_fps_start = time.time()
         jpeg_quality = 80
+        jpeg_buf = io.BytesIO()  # reusable buffer for JPEG encoding
+        last_exp_us = None  # track last exposure to avoid redundant set_controls
 
         logger.info("Streaming loop started")
 
@@ -1170,9 +1197,11 @@ class CameraControl:
                     stream_exp = self.parent.knownVectors["STREAMING_EXPOSURE"]["STREAMING_EXPOSURE_VALUE"].value
                     divisor = max(1, int(self.parent.knownVectors["STREAMING_EXPOSURE"]["STREAMING_DIVISOR_VALUE"].value))
 
-                # Update exposure if changed
+                # Update exposure only when changed
                 exp_us = max(int(stream_exp * 1e6), 1)
-                self.picam2.set_controls({"ExposureTime": exp_us})
+                if exp_us != last_exp_us:
+                    self.picam2.set_controls({"ExposureTime": exp_us})
+                    last_exp_us = exp_us
 
                 # Capture frame
                 array = self.picam2.capture_array("main")
@@ -1187,9 +1216,10 @@ class CameraControl:
                 if (frame_count % divisor) != 0:
                     continue
 
-                # JPEG encode
+                # JPEG encode (reuse buffer to reduce allocations)
+                jpeg_buf.seek(0)
+                jpeg_buf.truncate()
                 img = Image.fromarray(array[:, :, ::-1])  # BGR888 -> RGB for PIL
-                jpeg_buf = io.BytesIO()
                 img.save(jpeg_buf, format='JPEG', quality=jpeg_quality)
                 jpeg_bytes = jpeg_buf.getvalue()
 
