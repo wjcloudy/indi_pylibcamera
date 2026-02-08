@@ -260,6 +260,8 @@ class CameraControl:
         self.StreamingThread = None
         self.Sig_StopStreaming = threading.Event()
         self.Sig_StopStreaming.clear()
+        self.Sig_StreamReady = threading.Event()  # gates streaming loop until client is notified
+        self.Sig_StreamReady.clear()
         # recording state
         self.is_recording = False
         self.ser_recorder = SERRecorder()
@@ -1129,7 +1131,7 @@ class CameraControl:
             logger.info("Video camera started")
 
             # Discard initial warm-up frames (auto-exposure needs a few frames to settle)
-            warmup_frames = 3
+            warmup_frames = 5
             logger.info(f"Discarding {warmup_frames} warm-up frames")
             for i in range(warmup_frames):
                 try:
@@ -1138,25 +1140,6 @@ class CameraControl:
                 except Exception as e:
                     logger.warning(f"Warm-up frame capture failed: {e}")
                     break
-
-            # Send first streaming frame synchronously BEFORE returning.
-            # This ensures CCD1 already contains a .stream_jpg blob when
-            # VideoStreamVector sends the OK state to the client.  Without
-            # this, KStars may re-display the stale .fits blob from a
-            # previous still capture in the video viewer and then crash
-            # when actual JPEG frames arrive with a different format.
-            try:
-                first_frame = self.picam2.capture_array("main")
-                first_img = Image.fromarray(first_frame[:, :, ::-1])
-                first_buf = io.BytesIO()
-                first_img.save(first_buf, format='JPEG', quality=80)
-                bv = self.parent.knownVectors["CCD1"]
-                bv["CCD1"].set_data(data=first_buf.getvalue(), format=".stream_jpg", compress=False)
-                bv.state = IVectorState.OK
-                bv.send_setVector()
-                logger.info("First streaming frame sent synchronously on CCD1")
-            except Exception as e:
-                logger.warning(f"Failed to send first streaming frame: {e}")
 
         except Exception as e:
             logger.error(f"Failed to configure video streaming: {e}")
@@ -1170,6 +1153,7 @@ class CameraControl:
 
         self.is_streaming = True
         self.Sig_StopStreaming.clear()
+        self.Sig_StreamReady.clear()  # streaming loop will wait for this before sending frames
         self.StreamingThread = threading.Thread(target=self.__StreamingLoop, daemon=True)
         self.StreamingThread.start()
 
@@ -1208,6 +1192,13 @@ class CameraControl:
         last_exp_us = None  # track last exposure to avoid redundant set_controls
 
         logger.info("Streaming loop started")
+
+        # Wait until the client has been notified that streaming is active
+        # (CCD_VIDEO_STREAM=OK sent). Sending frames before this confuses
+        # KStars which only opens the video viewer on receiving OK.
+        if not self.Sig_StreamReady.wait(timeout=5.0):
+            logger.warning("Timed out waiting for stream-ready signal")
+            return
 
         while not self.Sig_StopStreaming.is_set():
             try:
