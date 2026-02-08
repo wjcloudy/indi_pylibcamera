@@ -260,8 +260,6 @@ class CameraControl:
         self.StreamingThread = None
         self.Sig_StopStreaming = threading.Event()
         self.Sig_StopStreaming.clear()
-        self.Sig_StreamReady = threading.Event()  # gates streaming loop until client is notified
-        self.Sig_StreamReady.clear()
         # recording state
         self.is_recording = False
         self.ser_recorder = SERRecorder()
@@ -1153,7 +1151,18 @@ class CameraControl:
 
         self.is_streaming = True
         self.Sig_StopStreaming.clear()
-        self.Sig_StreamReady.clear()  # streaming loop will wait for this before sending frames
+        # Force-enable BLOBs on CCD2 so frames aren't silently dropped.
+        # KStars sends enableBLOB Never when streaming stops, and the
+        # IBlob.enabled flag persists.  If our thread sends frames before
+        # KStars re-sends enableBLOB Also, get_oneProperty() returns empty
+        # XML and every frame is silently lost.
+        try:
+            bv = self.parent.knownVectors["CCD2"]
+            for elem in bv.elements:
+                if hasattr(elem, 'enabled'):
+                    elem.enabled = "Also"
+        except Exception:
+            pass
         self.StreamingThread = threading.Thread(target=self.__StreamingLoop, daemon=True)
         self.StreamingThread.start()
 
@@ -1192,13 +1201,6 @@ class CameraControl:
         last_exp_us = None  # track last exposure to avoid redundant set_controls
 
         logger.info("Streaming loop started")
-
-        # Wait until the client has been notified that streaming is active
-        # (CCD_VIDEO_STREAM=OK sent). Sending frames before this confuses
-        # KStars which only opens the video viewer on receiving OK.
-        if not self.Sig_StreamReady.wait(timeout=5.0):
-            logger.warning("Timed out waiting for stream-ready signal")
-            return
 
         while not self.Sig_StopStreaming.is_set():
             try:

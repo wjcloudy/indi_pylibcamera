@@ -465,9 +465,6 @@ class VideoStreamVector(ISwitchVector):
             self.parent.CameraThread.startStreaming()
             self.state = IVectorState.OK
             self.send_setVector()
-            # Allow the streaming loop to start sending frames now that
-            # the client has been told streaming is active.
-            self.parent.CameraThread.Sig_StreamReady.set()
         else:
             self.parent.CameraThread.stopStreaming()
             self.state = IVectorState.IDLE
