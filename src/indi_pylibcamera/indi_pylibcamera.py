@@ -1343,19 +1343,20 @@ class indi_pylibcamera(indidevice):
             send_defVector=True,
         )
         self.CameraVectorNames.append("CCD_STREAM_FRAME")
-        # Streaming BLOB (the video frame BLOB — separate from CCD1 stills BLOB)
+        # CCD2: Video streaming BLOB vector — separate from CCD1 (stills)
+        # KStars/Ekos expects video frames on CCD2 by convention.
         self.checkin(
             IBlobVector(
-                device=self.device, timestamp=self.timestamp, name="STREAM_VIDEO_BLOB",
+                device=self.device, timestamp=self.timestamp, name="CCD2",
                 elements=[
-                    IBlob(name="STREAM_VIDEO_BLOB", label="Video Stream"),
+                    IBlob(name="CCD2", label="Video Stream"),
                 ],
                 label="Video", group="Streaming",
                 state=IVectorState.IDLE, perm=IPermission.RO, is_storable=False,
             ),
             send_defVector=True,
         )
-        self.CameraVectorNames.append("STREAM_VIDEO_BLOB")
+        self.CameraVectorNames.append("CCD2")
         # Recording controls
         self.checkin(
             RecordStreamVector(parent=self),

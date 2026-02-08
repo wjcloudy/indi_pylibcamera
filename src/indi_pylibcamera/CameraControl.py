@@ -1254,10 +1254,12 @@ class CameraControl:
                             self.stopRecording()
                             self.parent.setVector("RECORD_STREAM", "RECORD_OFF", value=ISwitchState.ON, state=IVectorState.OK)
 
-                # Send BLOB to client via CCD1 (standard INDI streaming BLOB)
+                # Send BLOB to client via CCD2 (dedicated INDI video streaming BLOB)
+                # CCD1 is reserved for still images (.fits). Using CCD2 prevents
+                # KStars from confusing video frames with stills.
                 try:
-                    bv = self.parent.knownVectors["CCD1"]
-                    bv["CCD1"].set_data(data=jpeg_bytes, format=".stream_jpg", compress=False)
+                    bv = self.parent.knownVectors["CCD2"]
+                    bv["CCD2"].set_data(data=jpeg_bytes, format=".stream_jpg", compress=False)
                     bv.state = IVectorState.OK
                     bv.send_setVector()
                 except Exception as e:
