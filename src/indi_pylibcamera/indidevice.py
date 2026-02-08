@@ -783,7 +783,7 @@ class indidevice:
         self.running = True
         self.knownVectors = IVectorList(name="knownVectors")
         # lock for device parameter
-        self.knownVectorsLock = threading.Lock()
+        self.knownVectorsLock = threading.RLock()
         # snooping
         self.SnoopingManager = SnoopingManager.SnoopingManager(parent=self, to_server_func=to_server, logger=logger)
 
@@ -832,6 +832,25 @@ class indidevice:
             device = xml.attrib.get('device', None)
             if xml.tag == "getProperties":
                 self.on_getProperties(device)
+            elif xml.tag == "enableBLOB":
+                # Client wants to enable/disable BLOB reception
+                blob_name = xml.attrib.get('name', None)
+                blob_mode = xml.text.strip() if xml.text else "Never"
+                logger.debug(f"enableBLOB: device={device}, name={blob_name}, mode={blob_mode}")
+                if blob_mode in ["Never", "Also", "Only"]:
+                    if blob_name is not None and blob_name in self.knownVectors:
+                        vec = self.knownVectors[blob_name]
+                        if hasattr(vec, 'elements'):
+                            for elem in vec.elements:
+                                if hasattr(elem, 'enabled'):
+                                    elem.enabled = blob_mode
+                    else:
+                        # Apply to all blob vectors
+                        for vec in self.knownVectors:
+                            if isinstance(vec, IBlobVector):
+                                for elem in vec.elements:
+                                    if hasattr(elem, 'enabled'):
+                                        elem.enabled = blob_mode
             elif (device is None) or (device == self.device):
                 if xml.tag in ["newNumberVector", "newTextVector", "newSwitchVector"]:
                     vectorName = xml.attrib["name"]

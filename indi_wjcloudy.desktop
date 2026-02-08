@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=INDI pylibcamera (wjcloudy)
+Comment=Start INDI server with wjcloudy fork
+Exec=lxterminal -t "INDI wjcloudy" -e bash /home/pi/venv_indi_pylibcamera_wjcloudy/start_indi.sh
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;

@@ -1,3 +1,16 @@
+3.2.0
+- added INDI video streaming support (MJPEG-encoded live video via CCD_VIDEO_STREAM)
+- new INDI properties for streaming control: CCD_VIDEO_STREAM (on/off), STREAMING_EXPOSURE
+  (exposure time and frame divisor), FPS (read-only instant and average), CCD_STREAM_FRAME
+  (stream resolution), STREAM_VIDEO_BLOB (video frame BLOB)
+- added SER file recording with RECORD_STREAM, RECORD_FILE, and RECORD_OPTIONS properties;
+  supports unlimited recording, duration-limited, and frame-count-limited modes
+- new SERRecorder module implementing the SER astronomy video file format with per-frame timestamps
+- added Pillow as a dependency for JPEG encoding of video frames
+- streaming uses picamera2 video configuration with BGR888 pixel format and configurable buffer count
+- camera automatically switches between still and video modes; stopping the stream forces
+  still-mode reconfiguration on the next exposure
+
 3.1.0
 - fixed README: changed 'libcamera' to 'rpicam'
 - using now new "FrameWallClock" key in the frame metadata dictionary to set "DATE-END"

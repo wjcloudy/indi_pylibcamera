@@ -14,11 +14,14 @@ import astropy.coordinates
 import astropy.units
 import astropy.utils.iers
 
+from PIL import Image
+
 from picamera2 import Picamera2
 from libcamera import controls, Rectangle
 
 
 from .indidevice import *
+from .SERRecorder import SERRecorder, SER_MONO, SER_RGB, SER_BGR
 
 
 class CameraSettings:
@@ -252,18 +255,34 @@ class CameraControl:
         self.Sig_Do.clear()
         self.Sig_ActionAbort.clear()
         self.ExposureThread = None
+        # streaming state
+        self.is_streaming = False
+        self.StreamingThread = None
+        self.Sig_StopStreaming = threading.Event()
+        self.Sig_StopStreaming.clear()
+        # recording state
+        self.is_recording = False
+        self.ser_recorder = SERRecorder()
+        self.record_max_duration = 0.0  # seconds, 0 = unlimited
+        self.record_max_frames = 0  # 0 = unlimited
 
 
     def closeCamera(self):
         """close camera
         """
         logger.info('closing camera')
+        # stop streaming if active
+        self.stopStreaming()
+        # stop recording if active
+        self.stopRecording()
         # stop exposure loop
         if self.ExposureThread is not None:
             if self.ExposureThread.is_alive():
                 self.Sig_ActionExit.set()
                 self.Sig_Do.set()
-                self.ExposureThread.join()  # wait until exposure loop exits
+                self.ExposureThread.join(timeout=5.0)  # wait until exposure loop exits
+                if self.ExposureThread.is_alive():
+                    logger.warning('Exposure thread did not exit within timeout')
         # close picam2
         if self.picam2 is not None:
             if self.picam2.started:
@@ -1023,3 +1042,259 @@ class CameraControl:
     def abortExposure(self):
         self.Sig_ActionExpose.clear()
         self.Sig_ActionAbort.set()
+
+    # ---- Video Streaming ----
+
+    def startStreaming(self):
+        """Start live video streaming.
+
+        Stops the still-exposure loop, reconfigures picamera2 for video,
+        and launches the streaming thread.
+        """
+        if self.is_streaming:
+            logger.warning("Streaming already active")
+            return
+        if self.picam2 is None:
+            logger.error("Cannot start streaming: camera not open")
+            return
+
+        logger.info("Starting video stream")
+
+        try:
+            # Stop exposure loop so we own the camera
+            if self.picam2.started:
+                self.picam2.stop_()
+
+            # Read streaming settings
+            with self.parent.knownVectorsLock:
+                stream_exp = self.parent.knownVectors["STREAMING_EXPOSURE"]["STREAMING_EXPOSURE_VALUE"].value
+                stream_w = int(self.parent.knownVectors["CCD_STREAM_FRAME"]["WIDTH"].value)
+                stream_h = int(self.parent.knownVectors["CCD_STREAM_FRAME"]["HEIGHT"].value)
+
+            # Cap stream resolution for performance — full sensor res is too slow for live video
+            max_stream_dim = 1280
+            if stream_w > max_stream_dim or stream_h > max_stream_dim:
+                scale = max_stream_dim / max(stream_w, stream_h)
+                stream_w = int(stream_w * scale) & ~1  # ensure even
+                stream_h = int(stream_h * scale) & ~1
+                logger.info(f"Stream resolution capped to {stream_w}x{stream_h} for performance")
+                # Update the INDI property so the client shows the actual values
+                self.parent.setVector("CCD_STREAM_FRAME", "WIDTH", value=stream_w, send=False)
+                self.parent.setVector("CCD_STREAM_FRAME", "HEIGHT", value=stream_h, state=IVectorState.OK)
+
+            logger.info(f"Configuring video: {stream_w}x{stream_h}, exposure={stream_exp}s")
+
+            # Configure for video
+            config = self.picam2.create_video_configuration(
+                main={"size": (stream_w, stream_h), "format": "BGR888"},
+                queue=True,
+                buffer_count=4,
+            )
+            self.picam2.align_configuration(config)
+            self.picam2.configure(config)
+            logger.info(f"Video configuration applied: {config['main']}")
+
+            # Set controls
+            exp_us = max(int(stream_exp * 1e6), 1)
+            cam_controls = {"ExposureTime": exp_us}
+            with self.parent.knownVectorsLock:
+                cam_controls["AnalogueGain"] = self.parent.knownVectors["CCD_GAIN"]["GAIN"].value
+            self.picam2.set_controls(cam_controls)
+            self.picam2.start()
+            logger.info("Video camera started")
+
+            # Discard initial warm-up frames (auto-exposure needs a few frames to settle)
+            warmup_frames = 5
+            logger.info(f"Discarding {warmup_frames} warm-up frames")
+            for i in range(warmup_frames):
+                try:
+                    self.picam2.capture_array("main")
+                    logger.debug(f"Warm-up frame {i+1}/{warmup_frames} captured")
+                except Exception as e:
+                    logger.warning(f"Warm-up frame capture failed: {e}")
+                    break
+
+        except Exception as e:
+            logger.error(f"Failed to configure video streaming: {e}")
+            # Try to restart camera in a usable state
+            try:
+                if self.picam2 is not None and not self.picam2.started:
+                    self.present_CameraSettings = CameraSettings()
+            except Exception:
+                pass
+            return
+
+        self.is_streaming = True
+        self.Sig_StopStreaming.clear()
+        self.StreamingThread = threading.Thread(target=self.__StreamingLoop, daemon=True)
+        self.StreamingThread.start()
+
+    def stopStreaming(self):
+        """Stop live video streaming and return camera to still mode."""
+        if not self.is_streaming:
+            return
+        logger.info("Stopping video stream")
+        self.Sig_StopStreaming.set()
+        if self.StreamingThread is not None and self.StreamingThread.is_alive():
+            self.StreamingThread.join(timeout=5.0)
+        self.is_streaming = False
+        # Stop recording if still running
+        self.stopRecording()
+        # Stop camera; the exposure loop will reconfigure for stills on next exposure
+        if self.picam2 is not None and self.picam2.started:
+            self.picam2.stop_()
+        # Force still-mode reconfiguration on next exposure
+        self.present_CameraSettings = CameraSettings()
+        logger.info("Video stream stopped")
+
+    def __StreamingLoop(self):
+        """Continuous streaming loop running in its own thread.
+
+        Captures frames from picamera2, JPEG-encodes them and sends
+        as INDI BLOBs via the CCD_VIDEO_STREAM BlobVector. Also updates
+        FPS and handles recording.
+        """
+        frame_count = 0
+        fps_frame_count = 0
+        fps_start_time = time.time()
+        avg_fps_frames = 0
+        avg_fps_start = time.time()
+        jpeg_quality = 80
+
+        logger.info("Streaming loop started")
+
+        while not self.Sig_StopStreaming.is_set():
+            try:
+                # Read streaming settings (may change live)
+                with self.parent.knownVectorsLock:
+                    stream_exp = self.parent.knownVectors["STREAMING_EXPOSURE"]["STREAMING_EXPOSURE_VALUE"].value
+                    divisor = max(1, int(self.parent.knownVectors["STREAMING_EXPOSURE"]["STREAMING_DIVISOR_VALUE"].value))
+
+                # Update exposure if changed
+                exp_us = max(int(stream_exp * 1e6), 1)
+                self.picam2.set_controls({"ExposureTime": exp_us})
+
+                # Capture frame
+                array = self.picam2.capture_array("main")
+
+                frame_count += 1
+
+                # Debug: log frame stats for first few frames to detect black frames
+                if frame_count <= 3:
+                    logger.info(f"Stream frame {frame_count}: shape={array.shape}, min={array.min()}, max={array.max()}, mean={array.mean():.1f}")
+
+                # Apply frame divisor — skip frames to reduce bandwidth
+                if (frame_count % divisor) != 0:
+                    continue
+
+                # JPEG encode
+                img = Image.fromarray(array[:, :, ::-1])  # BGR888 -> RGB for PIL
+                jpeg_buf = io.BytesIO()
+                img.save(jpeg_buf, format='JPEG', quality=jpeg_quality)
+                jpeg_bytes = jpeg_buf.getvalue()
+
+                # Recording: write raw frame data to SER file
+                if self.is_recording and self.ser_recorder.is_open:
+                    # SER expects raw pixel data, use BGR order to match config
+                    raw_bytes = array.tobytes()
+                    self.ser_recorder.add_frame(raw_bytes, timestamp_ns=time.time_ns())
+                    # Check recording limits
+                    with self.parent.knownVectorsLock:
+                        rec_frames_done = self.ser_recorder.frame_count
+                    if self.record_max_frames > 0 and rec_frames_done >= self.record_max_frames:
+                        logger.info(f"Recording frame limit reached ({self.record_max_frames})")
+                        self.stopRecording()
+                        self.parent.setVector("RECORD_STREAM", "RECORD_OFF", value=ISwitchState.ON, state=IVectorState.OK)
+                    elif self.record_max_duration > 0:
+                        if not hasattr(self, '_record_start_time'):
+                            self._record_start_time = time.time()
+                        elapsed = time.time() - self._record_start_time
+                        if elapsed >= self.record_max_duration:
+                            logger.info(f"Recording duration limit reached ({self.record_max_duration}s)")
+                            self.stopRecording()
+                            self.parent.setVector("RECORD_STREAM", "RECORD_OFF", value=ISwitchState.ON, state=IVectorState.OK)
+
+                # Send BLOB to client via CCD1 (standard INDI streaming BLOB)
+                try:
+                    bv = self.parent.knownVectors["CCD1"]
+                    bv["CCD1"].set_data(data=jpeg_bytes, format=".stream_jpg", compress=False)
+                    bv.state = IVectorState.OK
+                    bv.send_setVector()
+                except Exception as e:
+                    logger.error(f"Error sending streaming BLOB: {e}")
+
+                # FPS calculation
+                fps_frame_count += 1
+                avg_fps_frames += 1
+                now = time.time()
+                elapsed = now - fps_start_time
+                if elapsed >= 1.0:
+                    est_fps = fps_frame_count / elapsed
+                    avg_elapsed = now - avg_fps_start
+                    avg_fps = avg_fps_frames / avg_elapsed if avg_elapsed > 0 else 0
+                    self.parent.setVector("FPS", "EST_FPS", value=round(est_fps, 1), send=False)
+                    self.parent.setVector("FPS", "AVG_FPS", value=round(avg_fps, 1), state=IVectorState.OK)
+                    fps_frame_count = 0
+                    fps_start_time = now
+
+            except Exception as e:
+                logger.error(f"Error in streaming loop: {e}")
+                time.sleep(0.1)
+
+        # Cleanup
+        self.parent.setVector("FPS", "EST_FPS", value=0, send=False)
+        self.parent.setVector("FPS", "AVG_FPS", value=0, state=IVectorState.IDLE)
+        logger.info("Streaming loop exited")
+
+    # ---- Recording ----
+
+    def startRecording(self, mode="RECORD_ON"):
+        """Start recording the video stream to a SER file.
+
+        Args:
+            mode: One of 'RECORD_ON' (unlimited), 'RECORD_DURATION' (time-limited),
+                  'RECORD_FRAME_COUNT' (frame-limited).
+        """
+        if not self.is_streaming:
+            logger.error("Cannot start recording: streaming not active")
+            return
+        if self.is_recording:
+            logger.warning("Recording already active")
+            return
+
+        with self.parent.knownVectorsLock:
+            rec_dir = self.parent.knownVectors["RECORD_FILE"]["RECORD_FILE_DIR"].value
+            rec_name = self.parent.knownVectors["RECORD_FILE"]["RECORD_FILE_NAME"].value
+            self.record_max_duration = self.parent.knownVectors["RECORD_OPTIONS"]["RECORD_DURATION"].value if mode == "RECORD_DURATION" else 0.0
+            self.record_max_frames = int(self.parent.knownVectors["RECORD_OPTIONS"]["RECORD_FRAME_TOTAL"].value) if mode == "RECORD_FRAME_COUNT" else 0
+            stream_w = int(self.parent.knownVectors["CCD_STREAM_FRAME"]["WIDTH"].value)
+            stream_h = int(self.parent.knownVectors["CCD_STREAM_FRAME"]["HEIGHT"].value)
+
+        # Build filename with timestamp
+        timestamp_str = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        if not rec_name:
+            rec_name = "record"
+        filename = f"{rec_name}_{timestamp_str}.ser"
+        filepath = os.path.join(rec_dir, filename)
+
+        self.ser_recorder.open(
+            filepath=filepath,
+            width=stream_w,
+            height=stream_h,
+            color_id=SER_BGR,  # We capture BGR888
+            bit_depth=8,
+            observer="",
+            instrument=self.parent.device,
+        )
+        self._record_start_time = time.time()
+        self.is_recording = True
+        logger.info(f"Recording started: {filepath}")
+
+    def stopRecording(self):
+        """Stop recording."""
+        if not self.is_recording:
+            return
+        self.is_recording = False
+        if self.ser_recorder.is_open:
+            self.ser_recorder.close()
+        logger.info("Recording stopped")

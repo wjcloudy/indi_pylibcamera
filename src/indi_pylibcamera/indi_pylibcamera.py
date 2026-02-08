@@ -433,6 +433,100 @@ class AbortVector(ISwitchVector):
             self.parent.abortExposure()
             self.parent.setVector("CCD_ABORT_EXPOSURE", "ABORT", value=ISwitchState.OFF, state=IVectorState.OK)
 
+
+class VideoStreamVector(ISwitchVector):
+    """INDI SwitchVector to start/stop video streaming (CCD_VIDEO_STREAM)
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        super().__init__(
+            device=self.parent.device, timestamp=self.parent.timestamp, name="CCD_VIDEO_STREAM",
+            elements=[
+                ISwitch(name="STREAM_ON", label="On", value=ISwitchState.OFF),
+                ISwitch(name="STREAM_OFF", label="Off", value=ISwitchState.ON),
+            ],
+            label="Video Stream", group="Streaming",
+            rule=ISwitchRule.ONEOFMANY, is_storable=False,
+        )
+
+    def set_byClient(self, values: dict):
+        """Handle stream on/off requests from client."""
+        self.message = self.update_SwitchStates(values=values)
+        if len(self.message) > 0:
+            self.state = IVectorState.ALERT
+            self.send_setVector()
+            self.message = ""
+            return
+        self.state = IVectorState.BUSY
+        self.send_setVector()
+        on_switches = self.get_OnSwitches()
+        if "STREAM_ON" in on_switches:
+            self.parent.CameraThread.startStreaming()
+            self.state = IVectorState.OK
+        else:
+            self.parent.CameraThread.stopStreaming()
+            self.state = IVectorState.IDLE
+        self.send_setVector()
+
+
+class StreamingExposureVector(INumberVector):
+    """INDI NumberVector for streaming exposure time and frame divisor.
+
+    Changes are applied live to the streaming loop (no need to stop/restart).
+    """
+
+    def __init__(self, parent, min_exp, max_exp):
+        self.parent = parent
+        super().__init__(
+            device=self.parent.device, timestamp=self.parent.timestamp, name="STREAMING_EXPOSURE",
+            elements=[
+                INumber(name="STREAMING_EXPOSURE_VALUE", label="Duration (s)",
+                        min=min_exp / 1e6, max=max_exp / 1e6,
+                        step=0.001, value=0.033, format="%.6f"),
+                INumber(name="STREAMING_DIVISOR_VALUE", label="Divisor",
+                        min=1, max=15, step=1, value=1, format="%.f"),
+            ],
+            label="Streaming Exposure", group="Streaming",
+        )
+
+
+class RecordStreamVector(ISwitchVector):
+    """INDI SwitchVector to start/stop recording (RECORD_STREAM)
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        super().__init__(
+            device=self.parent.device, timestamp=self.parent.timestamp, name="RECORD_STREAM",
+            elements=[
+                ISwitch(name="RECORD_ON", label="Record", value=ISwitchState.OFF),
+                ISwitch(name="RECORD_DURATION", label="Record (duration)", value=ISwitchState.OFF),
+                ISwitch(name="RECORD_FRAME_COUNT", label="Record (frames)", value=ISwitchState.OFF),
+                ISwitch(name="RECORD_OFF", label="Stop", value=ISwitchState.ON),
+            ],
+            label="Record", group="Streaming",
+            rule=ISwitchRule.ONEOFMANY, is_storable=False,
+        )
+
+    def set_byClient(self, values: dict):
+        """Handle record on/off from client."""
+        self.message = self.update_SwitchStates(values=values)
+        if len(self.message) > 0:
+            self.state = IVectorState.ALERT
+            self.send_setVector()
+            self.message = ""
+            return
+        on_switches = self.get_OnSwitches()
+        if len(on_switches) > 0 and on_switches[0] != "RECORD_OFF":
+            mode = on_switches[0]
+            self.parent.CameraThread.startRecording(mode=mode)
+            self.state = IVectorState.BUSY
+        else:
+            self.parent.CameraThread.stopRecording()
+            self.state = IVectorState.IDLE
+        self.send_setVector()
+
 class PrintSnoopedValuesVector(ISwitchVector):
     """Button that prints all snooped values as INFO in log
     """
@@ -740,13 +834,26 @@ def kill_oldDriver(driver_instance):
                     break
     for pid_oldDriver in pids_oldDriver:
         try:
-            os.kill(pid_oldDriver, signal.SIGKILL)
+            # Send SIGTERM first to allow graceful cleanup (release camera)
+            os.kill(pid_oldDriver, signal.SIGTERM)
         except ProcessLookupError:
             # process does not exist anymore
             pass
         except PermissionError:
             # not allowed to kill
             print(f'ERROR: Do not have permission to kill old driver with PID {pid_oldDriver}.', file=sys.stderr)
+    # Give old processes time to release the camera hardware
+    if pids_oldDriver:
+        import time as _time
+        _time.sleep(2)
+        # Force-kill any that didn't exit gracefully
+        for pid_oldDriver in pids_oldDriver:
+            try:
+                os.kill(pid_oldDriver, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                pass
 
 
 # the device driver
@@ -911,8 +1018,13 @@ class indi_pylibcamera(indidevice):
         """exit driver on system signals
         """
         logger.info("Exit triggered by SIGINT or SIGTERM")
-        self.CameraThread.closeCamera()
+        self.running = False
+        try:
+            self.CameraThread.closeCamera()
+        except Exception as e:
+            logger.error(f"Error during camera cleanup: {e}")
         traceback.print_stack(frame)
+        sys.stderr.flush()
         sys.exit(0)
 
     def closeCamera(self):
@@ -1173,6 +1285,106 @@ class indi_pylibcamera(indidevice):
             send_defVector=True,
         )
         self.CameraVectorNames.append("CCD_GAIN")
+        #
+        # ---- Streaming properties ----
+        # Video stream on/off
+        self.checkin(
+            VideoStreamVector(parent=self),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("CCD_VIDEO_STREAM")
+        # Streaming exposure time and frame divisor
+        self.checkin(
+            StreamingExposureVector(
+                parent=self,
+                min_exp=self.CameraThread.min_ExposureTime,
+                max_exp=self.CameraThread.max_ExposureTime,
+            ),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("STREAMING_EXPOSURE")
+        # FPS feedback (read-only)
+        self.checkin(
+            INumberVector(
+                device=self.device, timestamp=self.timestamp, name="FPS",
+                elements=[
+                    INumber(name="EST_FPS", label="Instant.", min=0, max=1000, step=0, value=0, format="%.1f"),
+                    INumber(name="AVG_FPS", label="Average", min=0, max=1000, step=0, value=0, format="%.1f"),
+                ],
+                label="FPS", group="Streaming",
+                state=IVectorState.IDLE, perm=IPermission.RO, is_storable=False,
+            ),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("FPS")
+        # Stream frame (subframe for streaming)
+        self.checkin(
+            INumberVector(
+                device=self.device, timestamp=self.timestamp, name="CCD_STREAM_FRAME",
+                elements=[
+                    INumber(name="X", label="Left", min=0,
+                            max=self.CameraThread.getProp("PixelArraySize")[0], step=1, value=0, format="%4.0f"),
+                    INumber(name="Y", label="Top", min=0,
+                            max=self.CameraThread.getProp("PixelArraySize")[1], step=1, value=0, format="%4.0f"),
+                    INumber(name="WIDTH", label="Width", min=1,
+                            max=self.CameraThread.getProp("PixelArraySize")[0], step=1,
+                            value=self.CameraThread.getProp("PixelArraySize")[0], format="%4.0f"),
+                    INumber(name="HEIGHT", label="Height", min=1,
+                            max=self.CameraThread.getProp("PixelArraySize")[1], step=1,
+                            value=self.CameraThread.getProp("PixelArraySize")[1], format="%4.0f"),
+                ],
+                label="Stream Frame", group="Streaming",
+                perm=IPermission.RW,
+            ),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("CCD_STREAM_FRAME")
+        # Streaming BLOB (the video frame BLOB — separate from CCD1 stills BLOB)
+        self.checkin(
+            IBlobVector(
+                device=self.device, timestamp=self.timestamp, name="STREAM_VIDEO_BLOB",
+                elements=[
+                    IBlob(name="STREAM_VIDEO_BLOB", label="Video Stream"),
+                ],
+                label="Video", group="Streaming",
+                state=IVectorState.IDLE, perm=IPermission.RO, is_storable=False,
+            ),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("STREAM_VIDEO_BLOB")
+        # Recording controls
+        self.checkin(
+            RecordStreamVector(parent=self),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("RECORD_STREAM")
+        # Recording file settings
+        self.checkin(
+            ITextVector(
+                device=self.device, timestamp=self.timestamp, name="RECORD_FILE",
+                elements=[
+                    IText(name="RECORD_FILE_DIR", label="Dir", value=str(Path.home())),
+                    IText(name="RECORD_FILE_NAME", label="Name", value="record"),
+                ],
+                label="Record File", group="Streaming",
+            ),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("RECORD_FILE")
+        # Recording options (duration and frame limits)
+        self.checkin(
+            INumberVector(
+                device=self.device, timestamp=self.timestamp, name="RECORD_OPTIONS",
+                elements=[
+                    INumber(name="RECORD_DURATION", label="Duration (s)", min=0, max=99999, step=1, value=1, format="%.f"),
+                    INumber(name="RECORD_FRAME_TOTAL", label="Frames", min=0, max=99999, step=1, value=30, format="%.f"),
+                ],
+                label="Record Options", group="Streaming",
+            ),
+            send_defVector=True,
+        )
+        self.CameraVectorNames.append("RECORD_OPTIONS")
+        # ---- End streaming properties ----
         #
         # configuration save and load
         self.checkin(
@@ -1539,7 +1751,20 @@ class indi_pylibcamera(indidevice):
 # main entry point
 def main(driver_instance=""):
     device = indi_pylibcamera(config=read_config(driver_instance=driver_instance), driver_instance=driver_instance)
+    # Register atexit handler to ensure camera is released even on unclean exit
+    import atexit
+    def _cleanup():
+        try:
+            device.CameraThread.closeCamera()
+        except Exception:
+            pass
+    atexit.register(_cleanup)
     device.run()
+    # Normal exit — clean up camera
+    try:
+        device.CameraThread.closeCamera()
+    except Exception:
+        pass
     return 0
 
 
