@@ -1129,7 +1129,7 @@ class CameraControl:
             logger.info("Video camera started")
 
             # Discard initial warm-up frames (auto-exposure needs a few frames to settle)
-            warmup_frames = 5
+            warmup_frames = 3
             logger.info(f"Discarding {warmup_frames} warm-up frames")
             for i in range(warmup_frames):
                 try:
@@ -1138,6 +1138,25 @@ class CameraControl:
                 except Exception as e:
                     logger.warning(f"Warm-up frame capture failed: {e}")
                     break
+
+            # Send first streaming frame synchronously BEFORE returning.
+            # This ensures CCD1 already contains a .stream_jpg blob when
+            # VideoStreamVector sends the OK state to the client.  Without
+            # this, KStars may re-display the stale .fits blob from a
+            # previous still capture in the video viewer and then crash
+            # when actual JPEG frames arrive with a different format.
+            try:
+                first_frame = self.picam2.capture_array("main")
+                first_img = Image.fromarray(first_frame[:, :, ::-1])
+                first_buf = io.BytesIO()
+                first_img.save(first_buf, format='JPEG', quality=80)
+                bv = self.parent.knownVectors["CCD1"]
+                bv["CCD1"].set_data(data=first_buf.getvalue(), format=".stream_jpg", compress=False)
+                bv.state = IVectorState.OK
+                bv.send_setVector()
+                logger.info("First streaming frame sent synchronously on CCD1")
+            except Exception as e:
+                logger.warning(f"Failed to send first streaming frame: {e}")
 
         except Exception as e:
             logger.error(f"Failed to configure video streaming: {e}")
